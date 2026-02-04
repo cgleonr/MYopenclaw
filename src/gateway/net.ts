@@ -115,67 +115,40 @@ export function isLocalGatewayAddress(ip: string | undefined): boolean {
 }
 
 /**
- * Resolves gateway bind host with fallback strategy.
+ * Resolves gateway bind host with SECURITY HARDENING.
  *
- * Modes:
- * - loopback: 127.0.0.1 (rarely fails, but handled gracefully)
- * - lan: always 0.0.0.0 (no fallback)
- * - tailnet: Tailnet IPv4 if available, else loopback
- * - auto: Loopback if available, else 0.0.0.0
- * - custom: User-specified IP, fallback to 0.0.0.0 if unavailable
+ * SECURITY: All modes are forced to loopback (127.0.0.1) for local-first deployment.
+ * The 0.0.0.0 fallbacks have been removed to prevent network exposure.
  *
- * @returns The bind address to use (never null)
+ * @returns The bind address to use (always 127.0.0.1)
  */
 export async function resolveGatewayBindHost(
   bind: import("../config/config.js").GatewayBindMode | undefined,
   customHost?: string,
 ): Promise<string> {
-  const mode = bind ?? "loopback";
-
-  if (mode === "loopback") {
-    // 127.0.0.1 rarely fails, but handle gracefully
-    if (await canBindToHost("127.0.0.1")) {
-      return "127.0.0.1";
-    }
-    return "0.0.0.0"; // extreme fallback
+  // SECURITY: Force loopback-only mode regardless of config
+  const requestedMode = bind ?? "loopback";
+  if (requestedMode !== "loopback") {
+    console.warn(
+      `[security] Gateway bind mode "${requestedMode}" is disabled for security. Forcing loopback (127.0.0.1).`,
+    );
+  }
+  if (customHost) {
+    console.warn(
+      `[security] Custom bind host "${customHost}" ignored. Forcing loopback (127.0.0.1).`,
+    );
   }
 
-  if (mode === "tailnet") {
-    const tailnetIP = pickPrimaryTailnetIPv4();
-    if (tailnetIP && (await canBindToHost(tailnetIP))) {
-      return tailnetIP;
-    }
-    if (await canBindToHost("127.0.0.1")) {
-      return "127.0.0.1";
-    }
-    return "0.0.0.0";
+  // Only allow loopback binding
+  if (await canBindToHost("127.0.0.1")) {
+    return "127.0.0.1";
   }
 
-  if (mode === "lan") {
-    return "0.0.0.0";
-  }
-
-  if (mode === "custom") {
-    const host = customHost?.trim();
-    if (!host) {
-      return "0.0.0.0";
-    } // invalid config → fall back to all
-
-    if (isValidIPv4(host) && (await canBindToHost(host))) {
-      return host;
-    }
-    // Custom IP failed → fall back to LAN
-    return "0.0.0.0";
-  }
-
-  if (mode === "auto") {
-    if (await canBindToHost("127.0.0.1")) {
-      return "127.0.0.1";
-    }
-    return "0.0.0.0";
-  }
-
-  return "0.0.0.0";
+  // SECURITY: Fail hard instead of falling back to 0.0.0.0
+  throw new Error(
+    "[security] Cannot bind to 127.0.0.1 - gateway startup blocked for security. " +
+    "Check if another process is using port 18789 or if loopback is disabled.",
+  );
 }
 
 /**

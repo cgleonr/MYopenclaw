@@ -59,6 +59,20 @@ function isTopLevelWindow(): boolean {
   }
 }
 
+// SECURITY: Blocked tunneling domains to prevent unauthorized remote access
+const BLOCKED_TUNNEL_DOMAINS = [
+  ".ngrok.io",
+  ".ngrok-free.app",
+  ".localtunnel.me",
+  ".trycloudflare.com",
+  ".loca.lt",
+];
+
+function isBlockedTunnelDomain(hostname: string): boolean {
+  const lower = hostname.toLowerCase();
+  return BLOCKED_TUNNEL_DOMAINS.some((domain) => lower.endsWith(domain));
+}
+
 function normalizeGatewayUrl(raw: string): string | null {
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -67,6 +81,17 @@ function normalizeGatewayUrl(raw: string): string | null {
   try {
     const parsed = new URL(trimmed);
     if (parsed.protocol !== "ws:" && parsed.protocol !== "wss:") {
+      return null;
+    }
+    // SECURITY: Only allow localhost connections (CVE-2026-25253 fix)
+    const host = parsed.hostname.toLowerCase();
+    if (host !== "localhost" && host !== "127.0.0.1" && host !== "::1") {
+      console.warn("[security] Blocked non-localhost gatewayUrl:", trimmed);
+      return null;
+    }
+    // SECURITY: Block tunneling services
+    if (isBlockedTunnelDomain(host)) {
+      console.warn("[security] Blocked tunneling service gatewayUrl:", trimmed);
       return null;
     }
     return trimmed;
@@ -111,20 +136,16 @@ export function applySettingsFromUrl(host: SettingsHost) {
   const gatewayUrlRaw = params.get("gatewayUrl");
   let shouldCleanUrl = false;
 
+  // SECURITY: Token via URL disabled to prevent exfiltration (CVE-2026-25253)
   if (tokenRaw != null) {
-    const token = tokenRaw.trim();
-    if (token && token !== host.settings.token) {
-      applySettings(host, { ...host.settings, token });
-    }
+    console.warn("[security] Token via URL query param blocked - use settings instead");
     params.delete("token");
     shouldCleanUrl = true;
   }
 
+  // SECURITY: Password via URL disabled to prevent exfiltration (CVE-2026-25253)
   if (passwordRaw != null) {
-    const password = passwordRaw.trim();
-    if (password) {
-      (host as unknown as { password: string }).password = password;
-    }
+    console.warn("[security] Password via URL query param blocked - use settings instead");
     params.delete("password");
     shouldCleanUrl = true;
   }

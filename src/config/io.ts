@@ -133,6 +133,35 @@ function warnOnConfigMiskeys(raw: unknown, logger: Pick<typeof console, "warn">)
   }
 }
 
+function validateNoConfigSecrets(cfg: OpenClawConfig): void {
+  const providers = cfg.models?.providers;
+  if (!providers) {
+    return;
+  }
+  for (const [name, provider] of Object.entries(providers)) {
+    if (provider?.apiKey) {
+      // SECURITY: Hard startup error if API keys are found in config
+      const isSecretKey =
+        name.includes("openai") ||
+        name.includes("anthropic") ||
+        name.includes("gemini") ||
+        name.includes("mistral") ||
+        provider.apiKey.startsWith("sk-") ||
+        provider.apiKey.length > 20;
+
+      if (isSecretKey) {
+        const error = new Error(
+          `[security] Hardcoded API key found in config for model provider "${name}".\n` +
+          `For security, you must perform credential sanitization.\n` +
+          `REMOVE "apiKey" from your config file and use environment variables (e.g. OPENAI_API_KEY) instead.`,
+        );
+        (error as { code?: string }).code = "INVALID_CONFIG";
+        throw error;
+      }
+    }
+  }
+}
+
 function stampConfigVersion(cfg: OpenClawConfig): OpenClawConfig {
   const now = new Date().toISOString();
   return {
@@ -242,6 +271,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
 
       const resolvedConfig = substituted;
       warnOnConfigMiskeys(resolvedConfig, deps.logger);
+      validateNoConfigSecrets(resolvedConfig as OpenClawConfig);
       if (typeof resolvedConfig !== "object" || resolvedConfig === null) {
         return {};
       }
